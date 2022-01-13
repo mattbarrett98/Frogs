@@ -1,0 +1,116 @@
+---
+title: "inference project"
+output: rmarkdown::github_document
+---
+
+```{r}
+load(file = url("https://mfasiolo.github.io/TOI/frogs.RData")) #loads our dataset "frogs"
+
+#function to calculate probabilities of different sized frogs being killed under a modified logistic model
+p.L<- function(phi, eps, beta) {
+  s<- frogs[,1]  #vector containing the different sizes of the frogs
+  return(c(exp(eps*(phi-s))/(1 + exp(beta*eps*(phi-s))))) #returns vector of probabilities
+}
+
+#function to evaluate the negative log likelihood under the modified logistic model
+log.lik.L<- function(x) { 
+  phi<- exp(x[1])  #appropriate transformations ensure that phi > 0,
+  eps<- -exp(x[2])  #epsilon < 0
+  beta<- exp(x[3]) + 1  #beta > 1
+  p<- p.L(phi, eps, beta) #calculates the probabilities of the different sized frogs being killed
+  obs<- frogs[,2]  #our observations of the number of frogs killed in each experiment
+  a<- sum(dbinom(obs, size = 10, prob = p, log=TRUE)) #computes the log likelihood
+  return(-a)  #returns negative log likelihood
+}
+
+logist<- optim(c(2.5,-1.4,2.5), log.lik.L, method = "BFGS", hessian = TRUE) #finds maximum likelihood estimates of the modified logistic model parameters
+p.L.hat<- p.L( exp(logist$par[1]), -exp(logist$par[2]), exp(logist$par[3])+1 ) #computes the fitted probabilities with these MLEs
+
+library(ggplot2) #package to enable better looking visualisations
+df<- data.frame(Size=c(frogs[,1], frogs[,1]), Prob=c(frogs[,2]/10, p.L.hat), grp=rep(c("Observed", "Fitted"), each=28 ))
+ggplot(df, aes(x=Size, y=Prob, group=grp)) +
+  geom_point(aes(color=grp)) +
+  ggtitle("Fitted vs observed probabilities (Modified logistic model)") +
+  ylab("Probability of being killed") +
+  theme(legend.title = element_blank())
+#we visualise the actual proportions of frogs killed in blue vs the fitted probabilities in red
+```
+
+```{r}
+#function to calculate probabilities of different sized frogs being killed under a generalised Ricker model
+p.R<- function(a, b, alpha) {
+  s<- frogs[,1]  #vector containing the different sizes of the frogs
+  return(c(b*( (s/a)*exp(1-s/a) )^alpha)) #returns vector of probabilities
+}
+
+#function to evaluate the negative log likelihood under the generalised Ricker model
+log.lik.R<- function(x) {
+  a<- exp(x[1])  #transformations to ensure: a > 0 
+  b<- exp(x[2])  #b > 0
+  alpha<- exp(x[3])  #alpha > 0
+  p<- p.R(a, b, alpha) #calculates the probabilities of the different sized frogs being killed
+  obs<- frogs[,2]  #our observations of the number of frogs killed in each experiment
+  a<- sum(dbinom(obs, size = 10, prob = p, log=TRUE)) #computes the log likelihood
+  return(-a)   #returns the negative log likelihood
+}
+
+ricker<- optim(c(2,-1.4,1.1), log.lik.R, method = "BFGS", hessian = TRUE) #finds maximum likelihood estimates of the generalised Ricker model parameters
+p.R.hat<- p.R(exp(ricker$par[1]), exp(ricker$par[2]), exp(ricker$par[3])) #computes the fitted probabilities with the MLEs
+
+library(ggplot2) #package to enable better looking visualisations
+df<- data.frame(Size=c(frogs[,1], frogs[,1]), Prob=c(frogs[,2]/10, p.R.hat), grp=rep(c("Observed", "Fitted"), each=28 ))
+ggplot(df, aes(x=Size, y=Prob, group=grp)) +
+  geom_point(aes(color=grp)) +
+  ggtitle("Fitted vs observed probabilities (Generalised Ricker model)") +
+  ylab("Probability of being killed") +
+  theme(legend.title = element_blank())
+#we visualise the actual proportions of frogs killed in blue vs the fitted probabilities in red
+
+
+2*length(logist$par) + 2*log.lik.L(logist$par) #AIC for logistic model
+2*length(ricker$par) + 2*log.lik.R(ricker$par) #AIC for ricker model
+
+```
+
+
+```{r}
+#function to calculate the size of maximal predation
+g<- function(x) {
+  s.hat.star<- log(x[3]-1)/(x[3]*x[2]) + x[1]
+  return(s.hat.star)
+}
+g(c(exp(logist$par[1]), -exp(logist$par[2]), exp(logist$par[3])+1))   #estimate of size where predation is maximal
+
+covar<- solve(logist$hessian) #approximate asymptotic covariance with the inverse of the hessian of the negative log likelihood evaluated at MLE
+mean<- logist$par #approximate the asymptotic mean with MLE
+
+library(MASS)     #provides function to simulate multivariate normal
+samples<- mvrnorm(1000000, mean, covar)   #1.sample from approximate distribution
+theta.hat<- cbind(exp(samples[,1]),-exp(samples[,2]),exp(samples[,3])+1)  #2.convert all samples to original parameters
+s.i<- apply(theta.hat, 1, g)  #3.compute s.hat_i for each sample
+
+sd(s.i)  #compute standard deviation of samples
+ci<- quantile(s.i, probs = c(0.025,0.975))  #95% confidence interval 
+
+#visualising distribution of s.hat^* with 95% CI bounds
+library(ggplot2)
+library(latex2exp)
+df<- data.frame(shat=s.i)
+ggplot(df, aes(x=shat)) +
+  geom_density(fill="skyblue") +
+  geom_vline(aes(xintercept=ci[1]), linetype="dashed", color="blue") +
+  geom_vline(aes(xintercept=ci[2]), linetype="dashed", color="blue") +
+  xlab(TeX("$\\hat{s}^*$")) +
+  ggtitle(TeX("Approximate distribution of $\\hat{s}^*$")) +
+  annotate(geom = "text", x=10.9, y=0.75, size=6, col="blue", label=TeX("$\\hat{s}^*\\approx 11.2$")) +
+  annotate(geom = "text", x=13.4, y=0.75, size=6, col="blue", label=TeX("$\\hat{s}^*\\approx 13.1$"))
+
+#finding intervals for varying levels of confidence to allow conservationists to adapt which frogs they protect based on their budget
+intervals<- matrix(0, nrow=20, ncol=2)
+for (i in 1:19) {
+  intervals[i,]<- quantile(s.i, probs = c( (50-5*i/2)/100, (50+5*i/2)/100 )) #CIs 5%, 10%,.., 95%
+}
+intervals[20,]<- quantile(s.i, probs = c( (50-99/2)/100, (50+99/2)/100 )) #99% CI 
+intervals
+```
+
